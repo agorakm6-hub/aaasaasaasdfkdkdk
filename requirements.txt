@@ -1,4 +1,0 @@
-Flask==2.3.3
-requests==2.31.0
-pyrogram==2.0.106
-pysocks==1.7.1
