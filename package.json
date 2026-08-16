@@ -2,12 +2,12 @@
   "name": "melonai-bot",
   "version": "1.0.0",
   "description": "Telegram-бот melonAI: чат, админ-панель, /rage, анализ файлов, текст в голос",
-  "main": "chat.js",
+  "main": "bot.js",
   "engines": {
     "node": ">=20.0.0"
   },
   "scripts": {
-    "start": "node chat.js"
+    "start": "node bot.js"
   },
   "dependencies": {
     "node-telegram-bot-api": "^0.66.0",
