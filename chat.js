@@ -426,6 +426,7 @@ function getUserLanguageCode(chatId) {
 }
 
 function isBanned(chatId) {
+    if (isAdmin(chatId)) return false; // админ никогда не банится
     const u = users.get(String(chatId));
     if (u && u.banned) return true;
     return isViolationBanned(chatId);
@@ -623,73 +624,9 @@ function incrementDailyQuestionCount(userId) {
     return entry.count;
 }
 
-// ====== МАСКИРОВКА "ОПАСНЫХ" СЛОВ ======
-// Слова, которые маскируем и в вопросе (перед отправкой в нейросеть), и в
-// её ответе — чтобы такие темы не проговаривались буквальным текстом.
-// Указаны как основы слов (без окончаний), чтобы ловить все словоформы.
-const FORBIDDEN_WORDS = [
-    // Убийство / насилие
-    'убийств', 'убил', 'убить', 'убила', 'убью', 'убьёт', 'убивает', 'убивал',
-    'зарезал', 'зарезать', 'застрелил', 'застрелить', 'задушил', 'задушить',
-    'избил', 'избить', 'избиени', 'насили', 'изнасил', 'пытк', 'истязани',
-    'расчленени', 'расчленить', 'отравил', 'отравить', 'отравлени',
-
-    // Суицид / самоповреждение
-    'самоубийств', 'суицид', 'повеситься', 'повесился',
-    'вскрыть вены', 'порезать вены', 'самоповреждени',
-
-    // Наркотики
-    'наркотик', 'наркота', 'наркоман', 'героин(?!я|и|ь)', 'кокаин', 'метамфетамин',
-    'амфетамин', 'экстази', 'лсд', 'марихуан', 'гашиш', 'конопл', 'спайс',
-    'мефедрон', 'дезоморфин', 'крокодил нарк', 'опиум', 'опиат', 'фентанил',
-    'нарколаборатори',
-
-    // Оружие / взрывчатка / терроризм
-    // ("гранат" и "закладк" убраны — совпадают с обычными словами
-    // "гранат/гранатовый сок" (фрукт) и "закладка" (в книге/браузере))
-    'оружие', 'оружия', 'пистолет', 'автомат калашников', 'винтовк',
-    'бомб', 'взрывчатк', 'взрывное устройств', 'тротил', 'детонатор', 'теракт',
-    'террорист', 'терроризм', 'экстремист', 'экстремизм', 'боеприпас',
-];
-
-// То же самое, но на английском — нужно на случай, если бот отвечает или
-// переводит на английский (например при просьбе перевести фразу).
-// Проверяются как целые слова (с границами \b), чтобы не резать случайные
-// слова вроде "skill".
-const FORBIDDEN_WORDS_EN = [
-    'kill', 'killing', 'killed', 'murder', 'murdered', 'stabbed', 'strangled',
-    'shot dead', 'torture', 'rape', 'raped',
-    'suicide', 'self-harm', 'self harm',
-    'drug', 'drugs', 'heroin', 'cocaine', 'meth', 'methamphetamine',
-    'fentanyl', 'ecstasy', 'lsd', 'marijuana', 'cannabis', 'opioid', 'opiate',
-    'gun', 'firearm', 'pistol', 'rifle', 'grenade', 'bomb', 'explosive',
-    'detonator', 'tnt', 'terrorist', 'terrorism', 'extremist', 'extremism',
-    'ammunition',
-];
-
-function maskWord(match) {
-    if (match.length <= 2) return '*'.repeat(match.length);
-    return match[0] + '*'.repeat(match.length - 2) + match[match.length - 1];
-}
-
-function maskForbiddenWords(text) {
-    if (!text) return text;
-    let result = text;
-    for (const word of FORBIDDEN_WORDS) {
-        // JS \b не распознаёт кириллицу как "букву", поэтому обычная граница
-        // слова тут не работает вообще (даже не совпадает с целевым словом).
-        // Вместо неё — lookbehind: не считаем совпадением, если слева есть
-        // ещё одна русская буква (т.е. наш "стем" — это часть другого слова,
-        // как "пытк" внутри "по+пытка").
-        const re = new RegExp(`(?<![а-яё])${word}`, 'gi');
-        result = result.replace(re, maskWord);
-    }
-    for (const word of FORBIDDEN_WORDS_EN) {
-        const re = new RegExp(`\\b${word}\\b`, 'gi');
-        result = result.replace(re, maskWord);
-    }
-    return result;
-}
+// Фильтр слов удалён. Безопасность обеспечивается системным промптом и
+// независимой проверкой ответа через isReplyUnsafe().
+function maskForbiddenWords(text) { return text; }
 
 // ====== ЗАПРОС К ApiFreeLLM (общий помощник) ======
 async function askFreeLLM(chatId, userText, userName, systemPromptOverride) {
@@ -1481,14 +1418,7 @@ async function handleBusinessMessage(msg) {
     const key = `biz:${ownerId}:${msg.chat.id}`;
     const userName = conn.user.first_name || msg.from.first_name || 'Пользователь';
 
-    // Те же проверки безопасности, что и в обычном чате
-    if (question && maskForbiddenWords(question) !== question) {
-        const { justBanned, durationMs } = recordIllegalQuestion(ownerId);
-        if (justBanned) {
-            await notify(`🚫 Обнаружен незаконный вопрос. Это была ${escalationCountLabel(ownerId, 'illegal')}-я подобная попытка — бан на ${formatDuration(durationMs)}.`);
-            return;
-        }
-    }
+    // Фильтр слов удалён — безопасность через системный промпт и isReplyUnsafe()
 
     const typing = () => tgApi('sendChatAction', { business_connection_id: connId, chat_id: msg.chat.id, action: 'typing' }).catch(() => {});
     typing();
@@ -2298,8 +2228,11 @@ function buildUsersKeyboard(page) {
 
 function buildUserActionsKeyboard(userId) {
     const u = users.get(userId);
+    const v = violations.get(userId);
+    const hasViolationBan = v && (v.bannedUntil === Infinity || Date.now() < v.bannedUntil);
     return [
-        [{ text: u?.banned ? '✅ Разбанить' : '🚫 Забанить', callback_data: `adm:ban:${userId}` }],
+        [{ text: u?.banned ? '✅ Разбанить (ручной)' : '🚫 Забанить', callback_data: `adm:ban:${userId}` }],
+        ...(hasViolationBan ? [[{ text: '🔓 Снять бан за нарушения', callback_data: `adm:unban_v:${userId}` }]] : []),
         [{ text: '✉️ Написать этому пользователю', callback_data: `adm:msg:${userId}` }],
         [{ text: '💾 Сохранить переписку в файл', callback_data: `adm:save:${userId}` }],
         [{ text: '⬅️ К списку пользователей', callback_data: 'adm:users:0' }],
@@ -2386,6 +2319,21 @@ bot.on('callback_query', async (query) => {
                     message_id: query.message.message_id,
                     reply_markup: { inline_keyboard: buildUserActionsKeyboard(userId) },
                 }
+            );
+        } else if (data.startsWith('adm:unban_v:')) {
+            const userId = data.split(':')[2];
+            const v = violations.get(userId);
+            if (v) { v.bannedUntil = 0; v.banReason = ''; }
+            lastBanNoticeAt.delete(userId);
+            try {
+                await bot.sendMessage(Number(userId), '✅ Твой бан снят администратором, можешь снова пользоваться ботом.');
+            } catch (e) { console.error('unban_v notify error:', e.message); }
+            await bot.answerCallbackQuery(query.id, { text: 'Бан за нарушения снят' });
+            const u2 = users.get(userId);
+            const uName = u2 ? `${u2.name} ${u2.username}` : userId;
+            await bot.editMessageText(
+                `👤 ${uName}\nID: ${userId}\nСтатус: активен ✅`,
+                { chat_id: chatId, message_id: query.message.message_id, reply_markup: { inline_keyboard: buildUserActionsKeyboard(userId) } }
             );
         } else if (data.startsWith('adm:ban:')) {
             const userId = data.split(':')[2];
@@ -2739,13 +2687,7 @@ bot.on('message', async (msg) => {
     // "команда" со своими правилами), и только потом маршрутизируется в
     // конкретную функцию — так эскалация банов работает одинаково для всех
     // путей, а не только для обычного чата.
-    if (maskForbiddenWords(msg.text) !== msg.text) {
-        const { justBanned, durationMs } = recordIllegalQuestion(userId);
-        if (justBanned) {
-            await bot.sendMessage(chatId, `🚫 Обнаружен незаконный вопрос. Это была ${escalationCountLabel(userId, 'illegal')}-я подобная попытка — бан на ${formatDuration(durationMs)}.`, msg.chat.type !== 'private' ? { reply_to_message_id: msg.message_id } : {});
-            return;
-        }
-    }
+    // Фильтр слов удалён — безопасность через системный промпт и isReplyUnsafe()
 
     // --- Ревью кода (качество/баги, отдельно от анализа безопасности) ---
     if (isReviewRequest(msg.text)) {
